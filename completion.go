@@ -241,31 +241,26 @@ func validateRequestForO1Models(request ChatCompletionRequest) error {
 
 // CompletionRequest represents a request structure for completion API.
 type CompletionRequest struct {
-	Model            string  `json:"model"`
-	Prompt           any     `json:"prompt,omitempty"`
-	BestOf           int     `json:"best_of,omitempty"`
-	Echo             bool    `json:"echo,omitempty"`
-	FrequencyPenalty float32 `json:"frequency_penalty,omitempty"`
-	// LogitBias is must be a token id string (specified by their token ID in the tokenizer), not a word string.
-	// incorrect: `"logit_bias":{"You": 6}`, correct: `"logit_bias":{"1639": 6}`
-	// refs: https://platform.openai.com/docs/api-reference/completions/create#completions/create-logit_bias
-	LogitBias map[string]int `json:"logit_bias,omitempty"`
-	// Store can be set to true to store the output of this completion request for use in distillations and evals.
-	// https://platform.openai.com/docs/api-reference/chat/create#chat-create-store
-	Store bool `json:"store,omitempty"`
-	// Metadata to store with the completion.
-	Metadata        map[string]string `json:"metadata,omitempty"`
-	LogProbs        int               `json:"logprobs,omitempty"`
-	MaxTokens       int               `json:"max_tokens,omitempty"`
-	N               int               `json:"n,omitempty"`
-	PresencePenalty float32           `json:"presence_penalty,omitempty"`
-	Seed            *int              `json:"seed,omitempty"`
-	Stop            []string          `json:"stop,omitempty"`
-	Stream          bool              `json:"stream,omitempty"`
-	Suffix          string            `json:"suffix,omitempty"`
-	Temperature     float32           `json:"temperature,omitempty"`
-	TopP            float32           `json:"top_p,omitempty"`
-	User            string            `json:"user,omitempty"`
+	Model            string                 `json:"model"`
+	Prompt           any                    `json:"prompt,omitempty"`
+	BestOf           int                    `json:"best_of,omitempty"`
+	Echo             bool                   `json:"echo,omitempty"`
+	FrequencyPenalty float32                `json:"frequency_penalty,omitempty"`
+	LogitBias        map[string]int         `json:"logit_bias,omitempty"`
+	Store            bool                   `json:"store,omitempty"`
+	Metadata         map[string]string      `json:"metadata,omitempty"`
+	LogProbs         int                    `json:"logprobs,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	N                int                    `json:"n,omitempty"`
+	PresencePenalty  float32                `json:"presence_penalty,omitempty"`
+	Seed             *int                   `json:"seed,omitempty"`
+	Stop             []string               `json:"stop,omitempty"`
+	Stream           bool                   `json:"stream,omitempty"`
+	Suffix           string                 `json:"suffix,omitempty"`
+	Temperature      float32                `json:"temperature,omitempty"`
+	TopP             float32                `json:"top_p,omitempty"`
+	User             string                 `json:"user,omitempty"`
+	ExtraBody        map[string]interface{} `json:"-"` // Will be serialized manually
 }
 
 // CompletionChoice represents one of possible completions.
@@ -321,16 +316,46 @@ func (c *Client) CreateCompletion(
 		return
 	}
 
+	// Serialize the request
+	body := make(map[string]interface{})
+	// Add all standard fields
+	body["model"] = request.Model
+	body["prompt"] = request.Prompt
+	body["best_of"] = request.BestOf
+	body["echo"] = request.Echo
+	body["frequency_penalty"] = request.FrequencyPenalty
+	body["logit_bias"] = request.LogitBias
+	body["store"] = request.Store
+	body["metadata"] = request.Metadata
+	body["logprobs"] = request.LogProbs
+	body["max_tokens"] = request.MaxTokens
+	body["n"] = request.N
+	body["presence_penalty"] = request.PresencePenalty
+	body["seed"] = request.Seed
+	body["stop"] = request.Stop
+	body["stream"] = request.Stream
+	body["suffix"] = request.Suffix
+	body["temperature"] = request.Temperature
+	body["top_p"] = request.TopP
+	body["user"] = request.User
+
+	// Add extra fields from ExtraBody
+	for k, v := range request.ExtraBody {
+		body[k] = v
+	}
+
+	// Create the HTTP request
 	req, err := c.newRequest(
 		ctx,
 		http.MethodPost,
 		c.fullURL(urlSuffix, withModel(request.Model)),
-		withBody(request),
+		withBody(body),
 	)
 	if err != nil {
 		return
 	}
 
+	// Send the request
 	err = c.sendRequest(req, &response)
 	return
 }
