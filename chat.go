@@ -259,7 +259,8 @@ type ChatCompletionRequest struct {
 	// https://platform.openai.com/docs/api-reference/chat/create#chat-create-store
 	Store bool `json:"store,omitempty"`
 	// Metadata to store with the completion.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Metadata  map[string]string      `json:"metadata,omitempty"`
+	ExtraBody map[string]interface{} `json:"-"` // Arbitrary extra parameters, not serialized directly
 }
 
 type StreamOptions struct {
@@ -394,11 +395,29 @@ func (c *Client) CreateChatCompletion(
 		return
 	}
 
+	// Serialize the request
+	body := make(map[string]interface{})
+	// Add standard fields
+	body["model"] = request.Model
+	body["messages"] = request.Messages
+	body["max_tokens"] = request.MaxTokens
+	body["temperature"] = request.Temperature
+	body["top_p"] = request.TopP
+	body["presence_penalty"] = request.PresencePenalty
+	body["frequency_penalty"] = request.FrequencyPenalty
+	body["stop"] = request.Stop
+	body["user"] = request.User
+
+	// Add extra fields from ExtraBody
+	for key, value := range request.ExtraBody {
+		body[key] = value
+	}
+
 	req, err := c.newRequest(
 		ctx,
 		http.MethodPost,
 		c.fullURL(urlSuffix, withModel(request.Model)),
-		withBody(request),
+		withBody(body), // Pass the serialized body with ExtraBody included
 	)
 	if err != nil {
 		return
