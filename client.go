@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -176,6 +177,7 @@ func sendRequestStream[T streamable](client *Client, req *http.Request) (*stream
 		response:           resp,
 		errAccumulator:     utils.NewErrorAccumulator(),
 		unmarshaler:        &utils.JSONUnmarshaler{},
+		dataBuffer:         new(bytes.Buffer),
 		httpHeader:         httpHeader(resp.Header),
 	}, nil
 }

@@ -3,11 +3,10 @@ package openai
 import (
 	"bufio"
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
-	"errors"
 
 	utils "github.com/sashabaranov/go-openai/internal"
 )
@@ -30,6 +29,7 @@ type streamReader[T streamable] struct {
 	response       *http.Response
 	errAccumulator utils.ErrorAccumulator
 	unmarshaler    utils.Unmarshaler
+	dataBuffer     *bytes.Buffer // Buffer for accumulating multi-line data
 
 	httpHeader
 }
@@ -43,6 +43,14 @@ func (stream *streamReader[T]) Recv() (response T, err error) {
 			return response, io.EOF
 		}
 		return
+	}
+
+	// Check if the response is an error response
+	if bytes.Contains(rawLine, []byte(`"error":`)) {
+		var errResp ErrorResponse
+		if err = stream.unmarshaler.Unmarshal(rawLine, &errResp); err == nil && errResp.Error != nil {
+			return response, errResp.Error
+		}
 	}
 
 	err = stream.unmarshaler.Unmarshal(rawLine, &response)
@@ -62,77 +70,82 @@ func (stream *streamReader[T]) RecvRaw() ([]byte, error) {
 
 //nolint:gocognit
 func (stream *streamReader[T]) processLines() ([]byte, error) {
-	var (
-		emptyMessagesCount uint
-		hasErrorPrefix     bool
-	)
+	// Initialize data buffer if needed
+	if stream.dataBuffer == nil {
+		stream.dataBuffer = new(bytes.Buffer)
+	}
+
+	var emptyMessagesCount uint
 
 	for {
 		rawLine, readErr := stream.reader.ReadBytes('\n')
 		
-		// Handle EOF with partial data
-		if readErr == io.EOF && len(rawLine) > 0 {
-			// Process the partial line first
-			noSpaceLine := bytes.TrimSpace(rawLine)
-			if headerData.Match(noSpaceLine) {
-				noPrefixLine := headerData.ReplaceAll(noSpaceLine, nil)
-				if string(noPrefixLine) != "[DONE]" {
-					// Return the partial data
-					return noPrefixLine, nil
+		// Handle read errors
+		if readErr != nil {
+			if readErr == io.EOF {
+				// Check if we have accumulated data
+				if stream.dataBuffer.Len() > 0 {
+					data := stream.dataBuffer.Bytes()
+					stream.dataBuffer.Reset()
+					return data, nil
 				}
-			}
-			// Check if we have any accumulated error data that might indicate incomplete stream
-			if len(stream.errAccumulator.Bytes()) > 0 {
-				// We have partial data in error accumulator, might be incomplete JSON
-				return nil, fmt.Errorf("stream ended unexpectedly with partial data")
-			}
-			// After processing partial data, return EOF
-			stream.isFinished = true
-			return nil, io.EOF
-		}
-		
-		if readErr != nil || hasErrorPrefix {
-			// Check if it's a real EOF (end of stream marker)
-			if readErr == io.EOF && !hasErrorPrefix && len(stream.errAccumulator.Bytes()) == 0 {
 				stream.isFinished = true
 				return nil, io.EOF
-			}
-			
-			respErr := stream.unmarshalError()
-			if respErr != nil {
-				return nil, fmt.Errorf("error, %w", respErr.Error)
 			}
 			return nil, readErr
 		}
 
-		noSpaceLine := bytes.TrimSpace(rawLine)
-		if errorPrefix.Match(noSpaceLine) {
-			hasErrorPrefix = true
-		}
-		if !headerData.Match(noSpaceLine) || hasErrorPrefix {
-			if hasErrorPrefix {
-				noSpaceLine = headerData.ReplaceAll(noSpaceLine, nil)
+		line := bytes.TrimRight(rawLine, "\r\n")
+		
+		// Empty line signals end of an event
+		if len(line) == 0 {
+			// Check if we have accumulated error data
+			if stream.errAccumulator.Bytes() != nil && len(stream.errAccumulator.Bytes()) > 0 {
+				respErr := stream.unmarshalError()
+				if respErr != nil {
+					return nil, respErr.Error
+				}
 			}
-			writeErr := stream.errAccumulator.Write(noSpaceLine)
-			if writeErr != nil {
-				return nil, writeErr
+			
+			if stream.dataBuffer.Len() > 0 {
+				// We have a complete event
+				data := stream.dataBuffer.Bytes()
+				stream.dataBuffer.Reset()
+				return data, nil
 			}
 			emptyMessagesCount++
 			if emptyMessagesCount > stream.emptyMessagesLimit {
 				return nil, ErrTooManyEmptyStreamMessages
 			}
-
 			continue
 		}
 
-		noPrefixLine := headerData.ReplaceAll(noSpaceLine, nil)
-		if string(noPrefixLine) == "[DONE]" {
-			stream.isFinished = true
-			stream.receivedDone = true
-			return nil, io.EOF
+		// Check for data: prefix
+		if bytes.HasPrefix(line, []byte("data: ")) {
+			data := bytes.TrimPrefix(line, []byte("data: "))
+			
+			// Check for [DONE] marker
+			if string(data) == "[DONE]" {
+				stream.isFinished = true
+				stream.receivedDone = true
+				return nil, io.EOF
+			}
+			
+			// Accumulate data (handles multi-line data)
+			if stream.dataBuffer.Len() > 0 {
+				stream.dataBuffer.WriteByte('\n') // Add newline between data lines
+			}
+			stream.dataBuffer.Write(data)
+		} else if bytes.HasPrefix(line, []byte("error: ")) {
+			// Handle error events
+			errData := bytes.TrimPrefix(line, []byte("error: "))
+			stream.errAccumulator.Write(errData)
+		} else if bytes.Contains(line, []byte(`"error":`)) && bytes.HasPrefix(line, []byte("{")) {
+			// Handle raw JSON error (backward compatibility)
+			stream.errAccumulator.Write(line)
+			stream.errAccumulator.Write([]byte("\n"))
 		}
-
-		return noPrefixLine, nil
+		// Ignore other event types (like event:, id:, retry:)
 	}
 }
 
