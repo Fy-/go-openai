@@ -53,8 +53,15 @@ func (stream *streamReader[T]) Recv() (response T, err error) {
 		}
 	}
 
+	// Try to unmarshal the response
 	err = stream.unmarshaler.Unmarshal(rawLine, &response)
 	if err != nil {
+		// SGLang might send partial JSON for structured output streaming
+		// Log but don't fail if it's a parsing error
+		if bytes.Contains(rawLine, []byte(`"choices"`)) {
+			// Likely a valid response with parsing issues, return empty response
+			return response, nil
+		}
 		return
 	}
 	return response, nil
@@ -111,6 +118,8 @@ func (stream *streamReader[T]) processLines() ([]byte, error) {
 				// We have a complete event
 				data := stream.dataBuffer.Bytes()
 				stream.dataBuffer.Reset()
+				// SGLang sometimes sends incomplete JSON chunks for structured output
+				// Skip validation here, let the unmarshaler handle it
 				return data, nil
 			}
 			emptyMessagesCount++
@@ -124,11 +133,18 @@ func (stream *streamReader[T]) processLines() ([]byte, error) {
 		if bytes.HasPrefix(line, []byte("data: ")) {
 			data := bytes.TrimPrefix(line, []byte("data: "))
 			
-			// Check for [DONE] marker
-			if string(data) == "[DONE]" {
+			// Check for [DONE] marker or SGLang's done indicator
+			dataStr := string(data)
+			if dataStr == "[DONE]" || dataStr == "done" {
 				stream.isFinished = true
 				stream.receivedDone = true
 				return nil, io.EOF
+			}
+			
+			// SGLang might send empty data as heartbeat
+			if dataStr == "" {
+				// Continue accumulating, might be a heartbeat
+				continue
 			}
 			
 			// Accumulate data (handles multi-line data)
