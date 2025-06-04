@@ -172,7 +172,7 @@ func sendRequestStream[T streamable](client *Client, req *http.Request) (*stream
 	}
 	return &streamReader[T]{
 		emptyMessagesLimit: client.config.EmptyMessagesLimit,
-		reader:             bufio.NewReader(resp.Body),
+		reader:             bufio.NewReaderSize(resp.Body, 65536), // Increase buffer size to 64KB
 		response:           resp,
 		errAccumulator:     utils.NewErrorAccumulator(),
 		unmarshaler:        &utils.JSONUnmarshaler{},

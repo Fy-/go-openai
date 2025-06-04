@@ -24,6 +24,7 @@ type streamable interface {
 type streamReader[T streamable] struct {
 	emptyMessagesLimit uint
 	isFinished         bool
+	receivedDone       bool // Track if we received the [DONE] marker
 
 	reader         *bufio.Reader
 	response       *http.Response
@@ -80,6 +81,11 @@ func (stream *streamReader[T]) processLines() ([]byte, error) {
 					return noPrefixLine, nil
 				}
 			}
+			// Check if we have any accumulated error data that might indicate incomplete stream
+			if len(stream.errAccumulator.Bytes()) > 0 {
+				// We have partial data in error accumulator, might be incomplete JSON
+				return nil, fmt.Errorf("stream ended unexpectedly with partial data")
+			}
 			// After processing partial data, return EOF
 			stream.isFinished = true
 			return nil, io.EOF
@@ -122,6 +128,7 @@ func (stream *streamReader[T]) processLines() ([]byte, error) {
 		noPrefixLine := headerData.ReplaceAll(noSpaceLine, nil)
 		if string(noPrefixLine) == "[DONE]" {
 			stream.isFinished = true
+			stream.receivedDone = true
 			return nil, io.EOF
 		}
 
@@ -145,4 +152,9 @@ func (stream *streamReader[T]) unmarshalError() (errResp *ErrorResponse) {
 
 func (stream *streamReader[T]) Close() error {
 	return stream.response.Body.Close()
+}
+
+// IsComplete returns true if the stream received the [DONE] marker
+func (stream *streamReader[T]) IsComplete() bool {
+	return stream.receivedDone
 }
