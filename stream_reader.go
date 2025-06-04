@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"errors"
 
 	utils "github.com/sashabaranov/go-openai/internal"
 )
@@ -35,6 +36,11 @@ type streamReader[T streamable] struct {
 func (stream *streamReader[T]) Recv() (response T, err error) {
 	rawLine, err := stream.RecvRaw()
 	if err != nil {
+		// Check for common network errors that might cause unexpected EOF
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			// Return EOF consistently for all EOF-like errors
+			return response, io.EOF
+		}
 		return
 	}
 
@@ -62,7 +68,30 @@ func (stream *streamReader[T]) processLines() ([]byte, error) {
 
 	for {
 		rawLine, readErr := stream.reader.ReadBytes('\n')
+		
+		// Handle EOF with partial data
+		if readErr == io.EOF && len(rawLine) > 0 {
+			// Process the partial line first
+			noSpaceLine := bytes.TrimSpace(rawLine)
+			if headerData.Match(noSpaceLine) {
+				noPrefixLine := headerData.ReplaceAll(noSpaceLine, nil)
+				if string(noPrefixLine) != "[DONE]" {
+					// Return the partial data
+					return noPrefixLine, nil
+				}
+			}
+			// After processing partial data, return EOF
+			stream.isFinished = true
+			return nil, io.EOF
+		}
+		
 		if readErr != nil || hasErrorPrefix {
+			// Check if it's a real EOF (end of stream marker)
+			if readErr == io.EOF && !hasErrorPrefix && len(stream.errAccumulator.Bytes()) == 0 {
+				stream.isFinished = true
+				return nil, io.EOF
+			}
+			
 			respErr := stream.unmarshalError()
 			if respErr != nil {
 				return nil, fmt.Errorf("error, %w", respErr.Error)
