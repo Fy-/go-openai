@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"net"
 	"net/http"
 	"regexp"
+	"time"
 )
 
 const (
@@ -48,6 +50,30 @@ type ClientConfig struct {
 	EmptyMessagesLimit uint
 }
 
+// defaultHTTPClient returns a new http.Client with appropriate timeouts and keep-alive settings
+func defaultHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Minute, // Generous timeout for streaming responses
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			// Disable compression to reduce latency for streaming
+			DisableCompression: true,
+			// Increase response header timeout for slow starts
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+}
+
 func DefaultConfig(authToken string) ClientConfig {
 	return ClientConfig{
 		authToken:        authToken,
@@ -56,7 +82,7 @@ func DefaultConfig(authToken string) ClientConfig {
 		AssistantVersion: defaultAssistantVersion,
 		OrgID:            "",
 
-		HTTPClient: &http.Client{},
+		HTTPClient: defaultHTTPClient(),
 
 		EmptyMessagesLimit: defaultEmptyMessagesLimit,
 	}
@@ -73,7 +99,7 @@ func DefaultAzureConfig(apiKey, baseURL string) ClientConfig {
 			return regexp.MustCompile(`[.:]`).ReplaceAllString(model, "")
 		},
 
-		HTTPClient: &http.Client{},
+		HTTPClient: defaultHTTPClient(),
 
 		EmptyMessagesLimit: defaultEmptyMessagesLimit,
 	}
@@ -90,7 +116,7 @@ func DefaultAnthropicConfig(apiKey, baseURL string) ClientConfig {
 		APIType:    APITypeAnthropic,
 		APIVersion: AnthropicAPIVersion,
 
-		HTTPClient: &http.Client{},
+		HTTPClient: defaultHTTPClient(),
 
 		EmptyMessagesLimit: defaultEmptyMessagesLimit,
 	}
