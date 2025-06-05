@@ -68,8 +68,8 @@ func defaultHTTPClient() *http.Client {
 			ExpectContinueTimeout: 1 * time.Second,
 			// Disable compression to reduce latency for streaming
 			DisableCompression: true,
-			// Increase response header timeout for slow starts
-			ResponseHeaderTimeout: 30 * time.Second,
+			// Don't set ResponseHeaderTimeout - let it default to no timeout
+			// This prevents "timeout awaiting response headers" errors with slow providers
 		},
 	}
 }
